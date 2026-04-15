@@ -1,5 +1,6 @@
 import { fetchFundedBy, fetchWalletBalances } from "./clients/helius.js";
 import { canExecuteLiveBuy, createUltraOrder, executeUltraOrder } from "./clients/jupiter.js";
+import { enrichTokenWithGmgnSocials } from "./clients/gmgn.js";
 import { normalizePumpPortalToken } from "./clients/pumpportal.js";
 import { config } from "./config.js";
 import { analyzeCreatorFunding, getXCommunityLink, hasTelegramLink } from "./filters.js";
@@ -154,10 +155,16 @@ function summarizeCandidate(candidate: CandidateResult): string {
 }
 
 export async function processNewTokenEvent(event: PumpPortalNewTokenEvent): Promise<void> {
-  const token = await normalizePumpPortalToken(event);
-  if (!token) {
+  const normalized = await normalizePumpPortalToken(event);
+  if (!normalized) {
     return;
   }
+
+  if (!normalized.metadataValid) {
+    return;
+  }
+
+  const token = await enrichTokenWithGmgnSocials(normalized.token);
 
   const socialDecision = shouldKeepSocial(token);
   if (!socialDecision.keep) {

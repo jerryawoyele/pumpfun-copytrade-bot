@@ -48,6 +48,12 @@ export interface PumpTokenMetadata {
   [key: string]: unknown;
 }
 
+export interface NormalizedPumpPortalTokenResult {
+  token: GmgnTrenchToken;
+  metadata: PumpTokenMetadata | null;
+  metadataValid: boolean;
+}
+
 export interface HeliusWalletBalance {
   mint: string;
   symbol: string;

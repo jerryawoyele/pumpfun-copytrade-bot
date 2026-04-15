@@ -1,6 +1,11 @@
 import WebSocket from "ws";
 import { config } from "../config.js";
-import type { GmgnTrenchToken, PumpPortalNewTokenEvent, PumpTokenMetadata } from "../types.js";
+import type {
+  GmgnTrenchToken,
+  NormalizedPumpPortalTokenResult,
+  PumpPortalNewTokenEvent,
+  PumpTokenMetadata,
+} from "../types.js";
 
 function normalizeUrl(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -27,7 +32,15 @@ export async function fetchTokenMetadata(uri: string): Promise<PumpTokenMetadata
   }
 }
 
-export async function normalizePumpPortalToken(event: PumpPortalNewTokenEvent): Promise<GmgnTrenchToken | null> {
+export function isValidMeta(meta: PumpTokenMetadata | null): boolean {
+  if (!meta) {
+    return false;
+  }
+
+  return Boolean(meta.name && meta.symbol && meta.image);
+}
+
+export async function normalizePumpPortalToken(event: PumpPortalNewTokenEvent): Promise<NormalizedPumpPortalTokenResult | null> {
   const address = typeof event.mint === "string" ? event.mint : "";
   const creator =
     (typeof event.traderPublicKey === "string" ? event.traderPublicKey : "") ||
@@ -38,10 +51,11 @@ export async function normalizePumpPortalToken(event: PumpPortalNewTokenEvent): 
   }
 
   const metadata = await fetchTokenMetadata(typeof event.uri === "string" ? event.uri : "");
+  const metadataValid = isValidMeta(metadata);
   const createdTimestamp =
     typeof event.timestamp === "number" && event.timestamp > 0 ? event.timestamp : Math.floor(Date.now() / 1000);
 
-  return {
+  const token: GmgnTrenchToken = {
     address,
     symbol: typeof event.symbol === "string" ? event.symbol : metadata?.symbol || "",
     name: typeof event.name === "string" ? event.name : metadata?.name || "",
@@ -61,6 +75,12 @@ export async function normalizePumpPortalToken(event: PumpPortalNewTokenEvent): 
     has_at_least_one_social: Boolean(
       metadata && (getMetadataField(metadata, "telegram") || getMetadataField(metadata, "twitter") || getMetadataField(metadata, "website")),
     ),
+  };
+
+  return {
+    token,
+    metadata,
+    metadataValid,
   };
 }
 
