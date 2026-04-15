@@ -10,8 +10,7 @@ let socket: WebSocket | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let heartbeatInterval: NodeJS.Timeout | null = null;
 let pongTimeout: NodeJS.Timeout | null = null;
-let lastPongAt = 0;
-const processedTokens = new Set<string>();
+let heartbeatResetTimer: NodeJS.Timeout | null = null;
 
 function scheduleReconnect(): void {
   if (reconnectTimer) {
@@ -46,6 +45,11 @@ function clearHeartbeat(): void {
     clearTimeout(pongTimeout);
     pongTimeout = null;
   }
+
+  if (heartbeatResetTimer) {
+    clearTimeout(heartbeatResetTimer);
+    heartbeatResetTimer = null;
+  }
 }
 
 function armPongTimeout(currentSocket: WebSocket): void {
@@ -65,10 +69,8 @@ function armPongTimeout(currentSocket: WebSocket): void {
 
 function startHeartbeat(currentSocket: WebSocket): void {
   clearHeartbeat();
-  lastPongAt = Date.now();
 
   currentSocket.on("pong", () => {
-    lastPongAt = Date.now();
     if (pongTimeout) {
       clearTimeout(pongTimeout);
       pongTimeout = null;
@@ -83,6 +85,15 @@ function startHeartbeat(currentSocket: WebSocket): void {
     armPongTimeout(currentSocket);
     currentSocket.ping();
   }, config.pumpPortal.pingIntervalMs);
+
+  heartbeatResetTimer = setTimeout(() => {
+    if (socket !== currentSocket) {
+      return;
+    }
+
+    logInfo("Resetting PumpPortal heartbeat connection.");
+    currentSocket.terminate();
+  }, config.pumpPortal.heartbeatResetMs);
 }
 
 async function ensureConnection(): Promise<void> {
@@ -98,11 +109,10 @@ async function ensureConnection(): Promise<void> {
   logInfo(`Connecting to PumpPortal WebSocket: ${config.pumpPortal.wsUrl}`);
   socket = connectPumpPortal((event) => {
     const mint = typeof event.mint === "string" ? event.mint : "";
-    if (!mint || processedTokens.has(mint)) {
+    if (!mint) {
       return;
     }
 
-    processedTokens.add(mint);
     void processNewTokenEvent(event).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       logWarn(`Failed to process token ${mint}: ${message}`);

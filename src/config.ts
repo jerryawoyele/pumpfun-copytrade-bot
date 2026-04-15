@@ -48,9 +48,10 @@ function getBoolean(name: string, fallback: boolean): boolean {
 export const config = {
   pumpPortal: {
     wsUrl: getString("PUMPPORTAL_WS_URL", "wss://pumpportal.fun/api/data"),
-    reconnectDelayMs: getNumber("PUMPPORTAL_RECONNECT_DELAY_MS", 3000),
+    reconnectDelayMs: getNumber("PUMPPORTAL_RECONNECT_DELAY_MS", 2000),
     pingIntervalMs: getNumber("PUMPPORTAL_PING_INTERVAL_MS", 15000),
     pongTimeoutMs: getNumber("PUMPPORTAL_PONG_TIMEOUT_MS", 10000),
+    heartbeatResetMs: getNumber("PUMPPORTAL_HEARTBEAT_RESET_MS", 300000),
   },
   helius: {
     apiKey: requireString("HELIUS_API_KEY"),
