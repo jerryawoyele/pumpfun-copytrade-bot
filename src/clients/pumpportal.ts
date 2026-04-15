@@ -1,0 +1,84 @@
+import WebSocket from "ws";
+import { config } from "../config.js";
+import type { GmgnTrenchToken, PumpPortalNewTokenEvent, PumpTokenMetadata } from "../types.js";
+
+function normalizeUrl(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getMetadataField(metadata: PumpTokenMetadata, key: "website" | "twitter" | "telegram"): string {
+  return normalizeUrl(metadata[key]) || normalizeUrl(metadata.extensions?.[key]);
+}
+
+export async function fetchTokenMetadata(uri: string): Promise<PumpTokenMetadata | null> {
+  if (!uri) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(uri, { headers: { Accept: "application/json" } });
+    if (!response.ok) {
+      return null;
+    }
+
+    return (await response.json()) as PumpTokenMetadata;
+  } catch {
+    return null;
+  }
+}
+
+export async function normalizePumpPortalToken(event: PumpPortalNewTokenEvent): Promise<GmgnTrenchToken | null> {
+  const address = typeof event.mint === "string" ? event.mint : "";
+  const creator =
+    (typeof event.traderPublicKey === "string" ? event.traderPublicKey : "") ||
+    (typeof event.creator === "string" ? event.creator : "");
+
+  if (!address || !creator) {
+    return null;
+  }
+
+  const metadata = await fetchTokenMetadata(typeof event.uri === "string" ? event.uri : "");
+  const createdTimestamp =
+    typeof event.timestamp === "number" && event.timestamp > 0 ? event.timestamp : Math.floor(Date.now() / 1000);
+
+  return {
+    address,
+    symbol: typeof event.symbol === "string" ? event.symbol : metadata?.symbol || "",
+    name: typeof event.name === "string" ? event.name : metadata?.name || "",
+    creator,
+    created_timestamp: createdTimestamp,
+    launchpad_platform: "Pump.fun",
+    liquidity: 0,
+    usd_market_cap: 0,
+    telegram: metadata ? getMetadataField(metadata, "telegram") : "",
+    twitter: metadata ? getMetadataField(metadata, "twitter") : "",
+    website: metadata ? getMetadataField(metadata, "website") : "",
+    holder_count: 0,
+    smart_degen_count: 0,
+    renowned_count: 0,
+    fund_from: "",
+    fund_from_ts: 0,
+    has_at_least_one_social: Boolean(
+      metadata && (getMetadataField(metadata, "telegram") || getMetadataField(metadata, "twitter") || getMetadataField(metadata, "website")),
+    ),
+  };
+}
+
+export function connectPumpPortal(onEvent: (event: PumpPortalNewTokenEvent) => void): WebSocket {
+  const ws = new WebSocket(config.pumpPortal.wsUrl);
+
+  ws.on("open", () => {
+    ws.send(JSON.stringify({ method: "subscribeNewToken" }));
+  });
+
+  ws.on("message", (data) => {
+    try {
+      const parsed = JSON.parse(data.toString()) as PumpPortalNewTokenEvent;
+      onEvent(parsed);
+    } catch {
+      // Ignore malformed frames.
+    }
+  });
+
+  return ws;
+}
