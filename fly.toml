@@ -1,17 +1,23 @@
-app = "pumpfun-worker-bot"
-primary_region = "fra"
-kill_signal = "SIGINT"
-kill_timeout = "30s"
+# fly.toml app configuration file generated for pumpfun-copytrade-bot on 2026-04-15T18:43:13Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'pumpfun-copytrade-bot'
+primary_region = 'fra'
 
 [build]
 
-[env]
-  NODE_ENV = "production"
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
 
-[processes]
-  app = "npm start"
-
-[vm]
-  cpu_kind = "shared"
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 512
+  memory_mb = 256
