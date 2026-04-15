@@ -17,3 +17,7 @@ export function logSuccess(message: string): void {
 export function logFound(message: string): void {
   console.log(`[FOUND] ${message}`);
 }
+
+export function logSignal(message: string): void {
+  console.log(`[SIGNAL] ${message}`);
+}

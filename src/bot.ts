@@ -3,7 +3,7 @@ import { canExecuteLiveBuy, createUltraOrder, executeUltraOrder } from "./client
 import { normalizePumpPortalToken } from "./clients/pumpportal.js";
 import { config } from "./config.js";
 import { analyzeCreatorFunding, getXCommunityLink, hasTelegramLink } from "./filters.js";
-import { logFound, logInfo, logSuccess, logWarn } from "./logger.js";
+import { logFound, logInfo, logSignal, logSuccess, logWarn } from "./logger.js";
 import { BuyState } from "./state.js";
 import type { CandidateResult, GmgnTrenchToken, HeliusFundedByResponse, PumpPortalNewTokenEvent } from "./types.js";
 
@@ -164,6 +164,7 @@ export async function processNewTokenEvent(event: PumpPortalNewTokenEvent): Prom
     return;
   }
 
+  logSignal(`${token.symbol || token.name || "unknown"} ${token.address} passed socials, checking Helius`);
   const candidate = await buildCandidate(token);
   if (!candidate) {
     return;
