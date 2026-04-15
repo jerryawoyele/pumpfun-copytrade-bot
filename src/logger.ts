@@ -1,3 +1,5 @@
+import { config } from "./config.js";
+
 export function logInfo(message: string): void {
   console.log(`[INFO] ${message}`);
 }
@@ -20,4 +22,12 @@ export function logFound(message: string): void {
 
 export function logSignal(message: string): void {
   console.log(`[SIGNAL] ${message}`);
+}
+
+export function logDebug(message: string): void {
+  if (!config.runtime.debugPipeline) {
+    return;
+  }
+
+  console.log(`[DEBUG] ${message}`);
 }

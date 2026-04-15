@@ -4,9 +4,13 @@ import { enrichTokenWithGmgnSocials } from "./clients/gmgn.js";
 import { normalizePumpPortalToken } from "./clients/pumpportal.js";
 import { config } from "./config.js";
 import { analyzeCreatorFunding, getXCommunityLink, hasTelegramLink } from "./filters.js";
-import { logFound, logInfo, logSignal, logSuccess, logWarn } from "./logger.js";
+import { logDebug, logFound, logInfo, logSignal, logSuccess, logWarn } from "./logger.js";
 import { BuyState } from "./state.js";
 import type { CandidateResult, GmgnTrenchToken, HeliusFundedByResponse, PumpPortalNewTokenEvent } from "./types.js";
+
+function getTokenLabel(token: Pick<GmgnTrenchToken, "symbol" | "name" | "address">): string {
+  return `${token.symbol || token.name || "unknown"} ${token.address}`;
+}
 
 function getExchangeTypeForFunding(funding: HeliusFundedByResponse | null): string | null {
   if (!funding) {
@@ -155,34 +159,59 @@ function summarizeCandidate(candidate: CandidateResult): string {
 }
 
 export async function processNewTokenEvent(event: PumpPortalNewTokenEvent): Promise<void> {
+  const eventMint = typeof event.mint === "string" ? event.mint : "unknown";
+  logDebug(`Received PumpPortal launch event for ${eventMint}.`);
+
   const normalized = await normalizePumpPortalToken(event);
   if (!normalized) {
+    logDebug(`Skipping ${eventMint}: missing mint or creator in launch payload.`);
     return;
   }
+
+  logDebug(
+    `Metadata fetched for ${normalized.token.address}: valid=${normalized.metadataValid} name=${normalized.token.name || "missing"} symbol=${normalized.token.symbol || "missing"} image=${normalized.metadata?.image ? "yes" : "no"}.`,
+  );
 
   if (!normalized.metadataValid) {
+    if (config.runtime.debugPipeline) {
+      const uri = typeof event.uri === "string" ? event.uri : "missing-uri";
+      throw new Error(
+        `Invalid token metadata for ${normalized.token.address}: missing ${normalized.missingMetadataFields.join(", ")} (uri=${uri})`,
+      );
+    }
+
     return;
   }
 
+  logDebug(`Enriching socials from GMGN fallback for ${getTokenLabel(normalized.token)}.`);
   const token = await enrichTokenWithGmgnSocials(normalized.token);
+  logDebug(
+    `Social sources for ${getTokenLabel(token)}: telegram=${token.telegram ? "yes" : "no"} twitter=${token.twitter ? "yes" : "no"} website=${token.website ? "yes" : "no"}.`,
+  );
 
   const socialDecision = shouldKeepSocial(token);
   if (!socialDecision.keep) {
+    logDebug(`Social filter rejected ${getTokenLabel(token)}: ${socialDecision.reasons.join(", ")}.`);
     return;
   }
 
-  logSignal(`${token.symbol || token.name || "unknown"} ${token.address} passed socials, checking Helius`);
-  const candidate = await buildCandidate(token);
+  logSignal(`${getTokenLabel(token)} passed socials, checking Helius`);
+  logDebug(`Starting Helius checks for ${getTokenLabel(token)}.`);
+  const { candidate, reasons } = await buildCandidate(token);
   if (!candidate) {
+    logInfo(`Helius filters rejected ${getTokenLabel(token)}: ${reasons.join(", ")}.`);
+    logDebug(`Helius filters rejected ${getTokenLabel(token)}.`);
     return;
   }
 
-  logFound(`${token.symbol || token.name || "unknown"} ${token.address}`);
+  logDebug(`Helius filters passed for ${getTokenLabel(token)}.`);
+  logInfo(`Helius filters passed for ${getTokenLabel(token)}.`);
+  logFound(getTokenLabel(token));
   console.log(summarizeCandidate(candidate));
   await maybeExecuteBuys([candidate]);
 }
 
-async function buildCandidate(token: GmgnTrenchToken): Promise<CandidateResult | null> {
+async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: CandidateResult | null; reasons: string[] }> {
   const [creatorBalances, creatorFunding, tokenFunding] = await Promise.all([
     fetchWalletBalances(token.creator),
     fetchFundedBy(token.creator),
@@ -200,12 +229,25 @@ async function buildCandidate(token: GmgnTrenchToken): Promise<CandidateResult |
   );
   const candidate: CandidateResult = { token, analysis, reasons: [] };
   const fundingDecision = shouldKeepFunding(candidate);
-
   if (!fundingDecision.keep) {
-    return null;
+    logDebug(`Funding analysis for ${getTokenLabel(token)}: ${fundingDecision.reasons.join(", ")}.`);
+  } else {
+    logDebug(
+      `Funding analysis passed for ${getTokenLabel(token)}: lag=${analysis.fundingLagHours ?? "n/a"}h min=${analysis.minFundingSol ?? "n/a"} max=${analysis.maxFundingSol ?? "n/a"} exchange=${analysis.matchedExchangeType ?? "none"} fresh=${analysis.isFreshWallet}.`,
+    );
   }
 
-  return candidate;
+  if (!fundingDecision.keep) {
+    return {
+      candidate: null,
+      reasons: fundingDecision.reasons,
+    };
+  }
+
+  return {
+    candidate,
+    reasons: [],
+  };
 }
 
 async function maybeExecuteBuys(results: CandidateResult[]): Promise<void> {
@@ -213,11 +255,13 @@ async function maybeExecuteBuys(results: CandidateResult[]): Promise<void> {
   const buyable = results.filter((candidate) => !buyState.has(candidate.token.address));
 
   if (buyable.length === 0) {
+    logDebug("All qualified tokens were already present in the buy state file.");
     logInfo("No new buy candidates after removing already-bought tokens.");
     return;
   }
 
   const selected = buyable.slice(0, config.jupiter.maxBuysPerCycle);
+  logDebug(`Selected ${selected.length} token(s) for buy evaluation out of ${results.length} qualified token(s).`);
 
   if (!config.jupiter.enableLiveBuy) {
     logInfo(
@@ -227,14 +271,17 @@ async function maybeExecuteBuys(results: CandidateResult[]): Promise<void> {
   }
 
   if (!canExecuteLiveBuy()) {
+    logDebug("Live buy gate failed because the Jupiter wallet configuration is incomplete.");
     logWarn("Live buy is enabled but Jupiter buyer wallet is not configured correctly.");
     return;
   }
 
   for (const candidate of selected) {
     try {
+      logDebug(`Creating Jupiter Ultra order for ${getTokenLabel(candidate.token)}.`);
       logInfo(`Submitting Jupiter Ultra buy for ${candidate.token.symbol} ${candidate.token.address}...`);
       const order = await createUltraOrder(candidate.token.address);
+      logDebug(`Executing signed Jupiter Ultra order for ${getTokenLabel(candidate.token)}.`);
       const execution = await executeUltraOrder(order);
       await buyState.markBought(candidate.token.address, execution.signature ?? null);
       logSuccess(
@@ -242,6 +289,7 @@ async function maybeExecuteBuys(results: CandidateResult[]): Promise<void> {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      logDebug(`Buy execution failed for ${getTokenLabel(candidate.token)}: ${message}`);
       logWarn(`Jupiter buy failed for ${candidate.token.symbol} ${candidate.token.address}: ${message}`);
     }
   }

@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 import { config } from "../config.js";
 import type {
@@ -20,16 +21,22 @@ export async function fetchTokenMetadata(uri: string): Promise<PumpTokenMetadata
     return null;
   }
 
-  try {
-    const response = await fetch(uri, { headers: { Accept: "application/json" } });
-    if (!response.ok) {
-      return null;
+  for (let attempt = 0; attempt < config.pumpPortal.metadataFetchRetries; attempt += 1) {
+    try {
+      const response = await fetch(uri, { headers: { Accept: "application/json" } });
+      if (response.ok) {
+        return (await response.json()) as PumpTokenMetadata;
+      }
+    } catch {
+      // Retry below.
     }
 
-    return (await response.json()) as PumpTokenMetadata;
-  } catch {
-    return null;
+    if (attempt < config.pumpPortal.metadataFetchRetries - 1) {
+      await delay(config.pumpPortal.metadataRetryDelayMs);
+    }
   }
+
+  return null;
 }
 
 export function isValidMeta(meta: PumpTokenMetadata | null): boolean {
@@ -38,6 +45,28 @@ export function isValidMeta(meta: PumpTokenMetadata | null): boolean {
   }
 
   return Boolean(meta.name && meta.symbol && meta.image);
+}
+
+export function getMissingMetaFields(meta: PumpTokenMetadata | null): string[] {
+  if (!meta) {
+    return ["name", "symbol", "image"];
+  }
+
+  const missing: string[] = [];
+
+  if (!meta.name) {
+    missing.push("name");
+  }
+
+  if (!meta.symbol) {
+    missing.push("symbol");
+  }
+
+  if (!meta.image) {
+    missing.push("image");
+  }
+
+  return missing;
 }
 
 export async function normalizePumpPortalToken(event: PumpPortalNewTokenEvent): Promise<NormalizedPumpPortalTokenResult | null> {
@@ -52,6 +81,7 @@ export async function normalizePumpPortalToken(event: PumpPortalNewTokenEvent): 
 
   const metadata = await fetchTokenMetadata(typeof event.uri === "string" ? event.uri : "");
   const metadataValid = isValidMeta(metadata);
+  const missingMetadataFields = getMissingMetaFields(metadata);
   const createdTimestamp =
     typeof event.timestamp === "number" && event.timestamp > 0 ? event.timestamp : Math.floor(Date.now() / 1000);
 
@@ -81,6 +111,7 @@ export async function normalizePumpPortalToken(event: PumpPortalNewTokenEvent): 
     token,
     metadata,
     metadataValid,
+    missingMetadataFields,
   };
 }
 

@@ -9,12 +9,22 @@ import type {
 const NATIVE_SOL_MINT = "So11111111111111111111111111111111111111111";
 
 export function isXCommunityUrl(url: string): boolean {
-  const normalized = url.trim().toLowerCase();
+  const normalized = normalizePossiblyPartialUrl(url).trim().toLowerCase();
   if (!normalized) {
     return false;
   }
 
-  return normalized.includes("x.com/i/communities/") || normalized.includes("twitter.com/i/communities/");
+  try {
+    const parsed = new URL(normalized);
+    const hostname = parsed.hostname.replace(/^www\./, "");
+    if (hostname !== "x.com" && hostname !== "twitter.com") {
+      return false;
+    }
+
+    return parsed.pathname.startsWith("/i/communities/");
+  } catch {
+    return false;
+  }
 }
 
 export function hasTelegramLink(url: string): boolean {

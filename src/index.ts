@@ -3,7 +3,7 @@ import type WebSocket from "ws";
 import { processNewTokenEvent } from "./bot.js";
 import { connectPumpPortal } from "./clients/pumpportal.js";
 import { config } from "./config.js";
-import { logError, logInfo, logWarn } from "./logger.js";
+import { logDebug, logError, logInfo, logWarn } from "./logger.js";
 import { isWithinRunWindow } from "./runtime.js";
 
 let socket: WebSocket | null = null;
@@ -17,6 +17,7 @@ function scheduleReconnect(): void {
     return;
   }
 
+  logDebug(`Scheduling PumpPortal reconnect in ${config.pumpPortal.reconnectDelayMs}ms.`);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     void ensureConnection();
@@ -62,6 +63,7 @@ function armPongTimeout(currentSocket: WebSocket): void {
       return;
     }
 
+    logDebug(`PumpPortal pong timeout reached after ${config.pumpPortal.pongTimeoutMs}ms.`);
     logWarn("PumpPortal heartbeat timed out. Reconnecting...");
     currentSocket.terminate();
   }, config.pumpPortal.pongTimeoutMs);
@@ -75,6 +77,8 @@ function startHeartbeat(currentSocket: WebSocket): void {
       clearTimeout(pongTimeout);
       pongTimeout = null;
     }
+
+    logDebug("Received PumpPortal pong frame.");
   });
 
   heartbeatInterval = setInterval(() => {
@@ -83,6 +87,7 @@ function startHeartbeat(currentSocket: WebSocket): void {
     }
 
     armPongTimeout(currentSocket);
+    logDebug("Sending PumpPortal ping frame.");
     currentSocket.ping();
   }, config.pumpPortal.pingIntervalMs);
 
@@ -91,6 +96,7 @@ function startHeartbeat(currentSocket: WebSocket): void {
       return;
     }
 
+    logDebug(`Heartbeat reset threshold reached after ${config.pumpPortal.heartbeatResetMs}ms.`);
     logInfo("Resetting PumpPortal heartbeat connection.");
     currentSocket.terminate();
   }, config.pumpPortal.heartbeatResetMs);
@@ -98,11 +104,13 @@ function startHeartbeat(currentSocket: WebSocket): void {
 
 async function ensureConnection(): Promise<void> {
   if (!isWithinRunWindow()) {
+    logDebug("Outside configured run window, ensuring PumpPortal socket stays closed.");
     closeSocket();
     return;
   }
 
   if (socket && (socket.readyState === 0 || socket.readyState === 1)) {
+    logDebug(`PumpPortal socket already active with readyState=${socket.readyState}.`);
     return;
   }
 
@@ -110,6 +118,7 @@ async function ensureConnection(): Promise<void> {
   socket = connectPumpPortal((event) => {
     const mint = typeof event.mint === "string" ? event.mint : "";
     if (!mint) {
+      logDebug("Ignoring PumpPortal message without a mint address.");
       return;
     }
 
@@ -120,6 +129,7 @@ async function ensureConnection(): Promise<void> {
   });
 
   startHeartbeat(socket);
+  logDebug("PumpPortal socket connected; heartbeat timers started.");
 
   socket.on("close", () => {
     logWarn("PumpPortal WebSocket closed.");

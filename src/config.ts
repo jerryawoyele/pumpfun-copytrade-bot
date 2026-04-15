@@ -52,6 +52,8 @@ export const config = {
     pingIntervalMs: getNumber("PUMPPORTAL_PING_INTERVAL_MS", 15000),
     pongTimeoutMs: getNumber("PUMPPORTAL_PONG_TIMEOUT_MS", 10000),
     heartbeatResetMs: getNumber("PUMPPORTAL_HEARTBEAT_RESET_MS", 300000),
+    metadataFetchRetries: getNumber("PUMPPORTAL_METADATA_FETCH_RETRIES", 3),
+    metadataRetryDelayMs: getNumber("PUMPPORTAL_METADATA_RETRY_DELAY_MS", 250),
   },
   helius: {
     apiKey: requireString("HELIUS_API_KEY"),
@@ -85,5 +87,6 @@ export const config = {
     runWindowEnd: getString("RUN_WINDOW_END", "23:00"),
     timezone: getString("RUN_TIMEZONE", "Africa/Lagos"),
     logLevel: getString("LOG_LEVEL", "info"),
+    debugPipeline: getBoolean("DEBUG_PIPELINE", false),
   },
 } as const;
