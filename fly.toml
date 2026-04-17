@@ -8,6 +8,10 @@ kill_timeout = "30s"
 [env]
   NODE_ENV = "production"
 
+[[mounts]]
+  source = "bot_state"
+  destination = "/data"
+
 [processes]
   app = "npm start"
 

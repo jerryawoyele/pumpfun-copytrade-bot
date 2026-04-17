@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "dev": "tsx src/index.ts",
+    "test:fee": "tsx test.ts",
     "start": "node --enable-source-maps --import=tsx src/index.ts",
     "run:once": "node --enable-source-maps --import=tsx src/index.ts --once"
   },

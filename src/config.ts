@@ -58,6 +58,10 @@ export const config = {
   helius: {
     apiKey: requireString("HELIUS_API_KEY"),
     historyLimit: getNumber("HELIUS_TX_HISTORY_LIMIT", 100),
+    minRequestIntervalMs: getNumber("HELIUS_MIN_REQUEST_INTERVAL_MS", 350),
+    rateLimitBackoffMs: getNumber("HELIUS_RATE_LIMIT_BACKOFF_MS", 5000),
+    devCreateFetchRetries: getNumber("HELIUS_DEV_CREATE_FETCH_RETRIES", 10),
+    devCreateRetryDelayMs: getNumber("HELIUS_DEV_CREATE_RETRY_DELAY_MS", 1000),
   },
   jupiter: {
     apiKey: getString("JUP_API_KEY", ""),
@@ -74,13 +78,16 @@ export const config = {
   filters: {
     requireTelegram: getBoolean("REQUIRE_TELEGRAM", true),
     requireXCommunity: getBoolean("REQUIRE_X_COMMUNITY", true),
+    maxDevCreatedTokens: getNumber("MAX_DEV_CREATED_TOKENS", 9),
+    minFirstTxFeeLamports: getNumber("MIN_FIRST_TX_FEE_LAMPORTS", 100000),
+    maxFirstTxFeeLamports: getNumber("MAX_FIRST_TX_FEE_LAMPORTS", 1000000),
+    firstTxFeeDifferenceSol: getNumber("FIRST_TX_FEE_DIFFERENCE_SOL", 0.00001),
+    firstTxPatternStateFile: getString("FIRST_TX_PATTERN_STATE_FILE", ".state/first-tx-pattern-addresses.json"),
     minFundingSol: getNumber("MIN_FUNDING_SOL", 0.2),
     maxFundingSol: getNumber("MAX_FUNDING_SOL", 25),
     minFundingHoursBeforeCreation: getNumber("MIN_FUNDING_HOURS_BEFORE_CREATION", 0),
     maxFundingHoursBeforeCreation: getNumber("MAX_FUNDING_HOURS_BEFORE_CREATION", 72),
-    maxPreviousTokenTxCount: getNumber("MAX_PREVIOUS_TOKEN_TX_COUNT", 0),
     requireExchangeFunder: getBoolean("REQUIRE_EXCHANGE_FUNDER", true),
-    maxFunderHops: getNumber("MAX_FUNDER_HOPS", 3),
   },
   runtime: {
     runWindowStart: getString("RUN_WINDOW_START", "08:00"),

@@ -55,6 +55,13 @@ export interface NormalizedPumpPortalTokenResult {
   missingMetadataFields: string[];
 }
 
+export interface SkippedPumpPortalTokenResult {
+  skipped: true;
+  reason: string;
+}
+
+export type PumpPortalTokenNormalizationResult = NormalizedPumpPortalTokenResult | SkippedPumpPortalTokenResult;
+
 export interface HeliusWalletBalance {
   mint: string;
   symbol: string;
@@ -93,11 +100,66 @@ export interface HeliusFundedByResponse {
   explorerUrl: string;
 }
 
+export interface HeliusEnhancedTransaction {
+  fee?: number;
+  feePayer?: string;
+  signature?: string;
+  slot?: number;
+  timestamp?: number;
+  type?: string;
+  source?: string;
+  tokenTransfers?: Array<{
+    fromTokenAccount?: string;
+    toTokenAccount?: string;
+    fromUserAccount?: string;
+    toUserAccount?: string;
+    tokenAmount?: number;
+    mint?: string;
+    tokenStandard?: string;
+  }>;
+  nativeTransfers?: Array<{
+    fromUserAccount?: string;
+    toUserAccount?: string;
+    amount?: number;
+  }>;
+  instructions?: Array<{
+    programId?: string;
+    data?: string;
+  }>;
+  [key: string]: unknown;
+}
+
+export interface TokenFirstTxFeeAnalysis {
+  signature: string;
+  feePayer: string | null;
+  source: string | null;
+  type: string | null;
+  timestamp: number | null;
+  firstTxFeeLamports: number | null;
+  computeUnitLimit: number | null;
+  computeUnitPriceMicroLamports: number | null;
+  priorityFeeLamports: number | null;
+  priorityFeeAtConsumedUnitsLamports: number | null;
+  computeUnitsConsumed: number | null;
+  totalFeeLamports: number | null;
+  priorityFeeSol: number | null;
+  priorityFeeAtConsumedUnitsSol: number | null;
+  totalFeeSol: number | null;
+  totalMinusPriorityFeeSol: number | null;
+  tipFeeLamports: number | null;
+  tipFeeSol: number | null;
+  nativeTransferCount: number;
+  nativePatternMatched: boolean;
+  nativePatternAddress: string | null;
+}
+
 export interface CreatorFundingAnalysis {
   creator: string;
   creatorFunding: HeliusFundedByResponse | null;
   tokenFunding: HeliusFundedByResponse | null;
   creatorFundingChain: HeliusFundedByResponse[];
+  devCreatedTokenCount: number | null;
+  firstTxFee: TokenFirstTxFeeAnalysis | null;
   fundingLagHours: number | null;
   minFundingSol: number | null;
   maxFundingSol: number | null;

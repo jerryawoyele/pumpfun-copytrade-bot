@@ -11,6 +11,7 @@ let reconnectTimer: NodeJS.Timeout | null = null;
 let heartbeatInterval: NodeJS.Timeout | null = null;
 let pongTimeout: NodeJS.Timeout | null = null;
 let heartbeatResetTimer: NodeJS.Timeout | null = null;
+const inFlightMints = new Set<string>();
 
 function scheduleReconnect(): void {
   if (reconnectTimer) {
@@ -122,10 +123,24 @@ async function ensureConnection(): Promise<void> {
       return;
     }
 
-    void processNewTokenEvent(event).catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      logWarn(`Failed to process token ${mint}: ${message}`);
-    });
+    if (inFlightMints.has(mint)) {
+      logDebug(`Skipping duplicate in-flight PumpPortal event for ${mint}.`);
+      return;
+    }
+
+    inFlightMints.add(mint);
+    void processNewTokenEvent(event)
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (config.runtime.debugPipeline) {
+          logWarn(`Failed to process token ${mint}: ${message}`);
+        } else {
+          logDebug(`Failed to process token ${mint}: ${message}`);
+        }
+      })
+      .finally(() => {
+        inFlightMints.delete(mint);
+      });
   });
 
   startHeartbeat(socket);

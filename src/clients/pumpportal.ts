@@ -4,6 +4,7 @@ import { config } from "../config.js";
 import type {
   GmgnTrenchToken,
   NormalizedPumpPortalTokenResult,
+  PumpPortalTokenNormalizationResult,
   PumpPortalNewTokenEvent,
   PumpTokenMetadata,
 } from "../types.js";
@@ -14,6 +15,14 @@ function normalizeUrl(value: unknown): string {
 
 function getMetadataField(metadata: PumpTokenMetadata, key: "website" | "twitter" | "telegram"): string {
   return normalizeUrl(metadata[key]) || normalizeUrl(metadata.extensions?.[key]);
+}
+
+export function isPumpFunIpfsMetadataUri(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  return value.trim().startsWith("https://ipfs.io/ipfs/");
 }
 
 export async function fetchTokenMetadata(uri: string): Promise<PumpTokenMetadata | null> {
@@ -69,17 +78,42 @@ export function getMissingMetaFields(meta: PumpTokenMetadata | null): string[] {
   return missing;
 }
 
-export async function normalizePumpPortalToken(event: PumpPortalNewTokenEvent): Promise<NormalizedPumpPortalTokenResult | null> {
+export async function normalizePumpPortalToken(event: PumpPortalNewTokenEvent): Promise<PumpPortalTokenNormalizationResult> {
   const address = typeof event.mint === "string" ? event.mint : "";
   const creator =
     (typeof event.traderPublicKey === "string" ? event.traderPublicKey : "") ||
     (typeof event.creator === "string" ? event.creator : "");
 
-  if (!address || !creator) {
-    return null;
+  if (!address) {
+    return {
+      skipped: true,
+      reason: `missing mint. event keys=${Object.keys(event).join(",")}`,
+    };
   }
 
-  const metadata = await fetchTokenMetadata(typeof event.uri === "string" ? event.uri : "");
+  if (!address.endsWith("pump")) {
+    return {
+      skipped: true,
+      reason: `mint does not end with pump. mint=${address}`,
+    };
+  }
+
+  if (!creator) {
+    return {
+      skipped: true,
+      reason: `missing creator/traderPublicKey. event keys=${Object.keys(event).join(",")}`,
+    };
+  }
+
+  const metadataUri = typeof event.uri === "string" ? event.uri : "";
+  if (!isPumpFunIpfsMetadataUri(metadataUri)) {
+    return {
+      skipped: true,
+      reason: `metadata uri is not https://ipfs.io/ipfs/. uri=${metadataUri || "missing"}`,
+    };
+  }
+
+  const metadata = await fetchTokenMetadata(metadataUri);
   const metadataValid = isValidMeta(metadata);
   const missingMetadataFields = getMissingMetaFields(metadata);
   const createdTimestamp =

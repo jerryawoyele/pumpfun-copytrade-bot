@@ -76,6 +76,8 @@ export function analyzeCreatorFunding(
   creatorFundingChain: HeliusFundedByResponse[],
   matchedExchangeKeyword: string | null,
   matchedExchangeHop: number | null,
+  devCreatedTokenCount: number | null,
+  firstTxFee: CreatorFundingAnalysis["firstTxFee"],
 ): CreatorFundingAnalysis {
   const creatorFundingAmount = creatorFunding?.symbol === "SOL" ? creatorFunding.amount : null;
   const tokenFundingAmount = tokenFunding?.symbol === "SOL" ? tokenFunding.amount : null;
@@ -87,6 +89,8 @@ export function analyzeCreatorFunding(
     creatorFunding,
     tokenFunding,
     creatorFundingChain,
+    devCreatedTokenCount,
+    firstTxFee,
     fundingLagHours: creatorFunding ? (token.created_timestamp - creatorFunding.timestamp) / 3600 : null,
     minFundingSol: fundingAmounts.length > 0 ? Math.min(...fundingAmounts) : null,
     maxFundingSol: fundingAmounts.length > 0 ? Math.max(...fundingAmounts) : null,

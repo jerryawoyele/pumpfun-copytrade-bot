@@ -1,12 +1,13 @@
-import { fetchFundedBy, fetchWalletBalances } from "./clients/helius.js";
+import { fetchDevCreateTransactionFeeAnalysis, fetchFundedBy } from "./clients/helius.js";
 import { canExecuteLiveBuy, createUltraOrder, executeUltraOrder } from "./clients/jupiter.js";
-import { enrichTokenWithGmgnSocials } from "./clients/gmgn.js";
 import { normalizePumpPortalToken } from "./clients/pumpportal.js";
 import { config } from "./config.js";
-import { analyzeCreatorFunding, getXCommunityLink, hasTelegramLink } from "./filters.js";
+import { analyzeCreatorFunding, getXCommunityLink } from "./filters.js";
 import { logDebug, logFound, logInfo, logSignal, logSuccess, logWarn } from "./logger.js";
-import { BuyState } from "./state.js";
-import type { CandidateResult, GmgnTrenchToken, HeliusFundedByResponse, PumpPortalNewTokenEvent } from "./types.js";
+import { BuyState, FirstTxPatternState } from "./state.js";
+import type { CandidateResult, GmgnTrenchToken, HeliusFundedByResponse, PumpPortalNewTokenEvent, TokenFirstTxFeeAnalysis } from "./types.js";
+
+const LAMPORTS_PER_SOL = 1_000_000_000;
 
 function getTokenLabel(token: Pick<GmgnTrenchToken, "symbol" | "name" | "address">): string {
   return `${token.symbol || token.name || "unknown"} ${token.address}`;
@@ -32,49 +33,28 @@ async function resolveCreatorFundingChain(
   matchedExchangeType: string | null;
   matchedExchangeHop: number | null;
 }> {
-  const chain: HeliusFundedByResponse[] = [];
-  const visited = new Set<string>();
-  let current = creatorFunding;
+  if (!creatorFunding) {
+    return {
+      chain: [],
+      matchedExchangeType: null,
+      matchedExchangeHop: null,
+    };
+  }
 
-  while (current && chain.length < config.filters.maxFunderHops) {
-    chain.push(current);
-
-    const match = getExchangeTypeForFunding(current);
-    if (match) {
-      return {
-        chain,
-        matchedExchangeType: match,
-        matchedExchangeHop: chain.length,
-      };
-    }
-
-    if (!current.funder || visited.has(current.funder)) {
-      break;
-    }
-
-    visited.add(current.funder);
-    current = await fetchFundedBy(current.funder);
+  const match = getExchangeTypeForFunding(creatorFunding);
+  if (!match) {
+    return {
+      chain: [creatorFunding],
+      matchedExchangeType: null,
+      matchedExchangeHop: null,
+    };
   }
 
   return {
-    chain,
-    matchedExchangeType: null,
-    matchedExchangeHop: null,
+    chain: [creatorFunding],
+    matchedExchangeType: match,
+    matchedExchangeHop: 1,
   };
-}
-
-function shouldKeepSocial(token: GmgnTrenchToken): { keep: boolean; reasons: string[] } {
-  const reasons: string[] = [];
-
-  if (config.filters.requireTelegram && !hasTelegramLink(token.telegram)) {
-    reasons.push("missing Telegram channel/group");
-  }
-
-  if (config.filters.requireXCommunity && !getXCommunityLink(token)) {
-    reasons.push("missing X community link");
-  }
-
-  return { keep: reasons.length === 0, reasons };
 }
 
 function shouldKeepFunding(candidate: CandidateResult): { keep: boolean; reasons: string[] } {
@@ -85,37 +65,74 @@ function shouldKeepFunding(candidate: CandidateResult): { keep: boolean; reasons
     reasons.push("no creator funded-by record found");
   }
 
-  if (analysis.fundingLagHours !== null) {
-    if (analysis.fundingLagHours < config.filters.minFundingHoursBeforeCreation) {
-      reasons.push("funding too close to creation");
-    }
-
-    if (analysis.fundingLagHours > config.filters.maxFundingHoursBeforeCreation) {
-      reasons.push("funding too old before creation");
-    }
-  }
-
-  if (analysis.minFundingSol !== null && analysis.minFundingSol < config.filters.minFundingSol) {
-    reasons.push("minimum inbound funding below threshold");
-  }
-
-  if (analysis.maxFundingSol !== null && analysis.maxFundingSol > config.filters.maxFundingSol) {
-    reasons.push("maximum inbound funding above threshold");
-  }
-
-  if (analysis.previousTokenTxCount > config.filters.maxPreviousTokenTxCount) {
-    reasons.push("creator wallet has non-native token balance history");
-  }
-
   if (config.filters.requireExchangeFunder && !analysis.matchedExchangeType) {
     reasons.push("creator funding source is not a centralized exchange");
   }
 
-  if (!analysis.isFreshWallet) {
-    reasons.push("creator wallet is not fresh");
+  if (analysis.devCreatedTokenCount === null) {
+    reasons.push("dev created token count could not be verified");
+  } else if (analysis.devCreatedTokenCount > config.filters.maxDevCreatedTokens) {
+    reasons.push(`dev created token count is ${analysis.devCreatedTokenCount}`);
+  }
+
+  if (!analysis.firstTxFee) {
+    reasons.push("first token transaction fee could not be verified");
+  } else {
+    reasons.push(...getFirstTxFilterReasons(analysis.firstTxFee));
   }
 
   return { keep: reasons.length === 0, reasons };
+}
+
+function getFirstTxFilterReasons(firstTxFee: TokenFirstTxFeeAnalysis): string[] {
+  return [...getFirstTxFeeAndTipReasons(firstTxFee), ...getNativeTransferPatternReasons(firstTxFee)];
+}
+
+function getFirstTxFeeAndTipReasons(firstTxFee: TokenFirstTxFeeAnalysis): string[] {
+  const reasons: string[] = [];
+  const targetFeeDifferenceLamports = Math.round(config.filters.firstTxFeeDifferenceSol * LAMPORTS_PER_SOL);
+  const firstTxFeeLamports = firstTxFee.firstTxFeeLamports;
+  const totalFeeLamports = firstTxFee.totalFeeLamports;
+  const priorityFeeLamports = firstTxFee.priorityFeeLamports;
+
+  if (firstTxFeeLamports === null) {
+    reasons.push("first token transaction fee is missing");
+  } else if (
+    firstTxFeeLamports < config.filters.minFirstTxFeeLamports ||
+    firstTxFeeLamports > config.filters.maxFirstTxFeeLamports
+  ) {
+    reasons.push(`first token transaction fee is ${firstTxFeeLamports} lamports`);
+  }
+
+  if (priorityFeeLamports === null) {
+    reasons.push("first token transaction priority fee could not be decoded");
+  } else if (totalFeeLamports === null) {
+    reasons.push("first token transaction total fee is missing");
+  } else if (totalFeeLamports - priorityFeeLamports !== targetFeeDifferenceLamports) {
+    reasons.push(`first token transaction fee difference is ${(totalFeeLamports - priorityFeeLamports) / LAMPORTS_PER_SOL} SOL`);
+  }
+
+  if (firstTxFee.tipFeeLamports === null) {
+    reasons.push("first token transaction tip fee could not be calculated");
+  } else if (firstTxFee.tipFeeLamports !== 0) {
+    reasons.push(`first token transaction tip fee is ${firstTxFee.tipFeeSol} SOL`);
+  }
+
+  return reasons;
+}
+
+function getNativeTransferPatternReasons(firstTxFee: TokenFirstTxFeeAnalysis): string[] {
+  const reasons: string[] = [];
+
+  if (!firstTxFee.nativePatternMatched) {
+    reasons.push(`first token transaction native transfer pattern failed with ${firstTxFee.nativeTransferCount} transfers`);
+  }
+
+  if (!firstTxFee.nativePatternAddress) {
+    reasons.push("first token transaction pattern address is missing");
+  }
+
+  return reasons;
 }
 
 function summarizeCandidate(candidate: CandidateResult): string {
@@ -127,14 +144,8 @@ function summarizeCandidate(candidate: CandidateResult): string {
   const maxFunding = analysis.maxFundingSol === null ? "n/a" : `${analysis.maxFundingSol.toFixed(3)} SOL`;
   const fundingTime = fundingAt > 0 ? new Date(fundingAt * 1000).toISOString() : "unknown";
   const xCommunity = getXCommunityLink(token) ?? "unknown";
-  const tokenFundingFrom = analysis.tokenFunding?.funder ?? "unknown";
-  const tokenFundingTime = analysis.tokenFunding?.timestamp ? new Date(analysis.tokenFunding.timestamp * 1000).toISOString() : "unknown";
   const exchangeLabel = analysis.matchedExchangeType ?? "unlabeled";
-  const exchangeHop = analysis.matchedExchangeHop ?? 0;
-  const creatorFundingPath =
-    analysis.creatorFundingChain.length > 0
-      ? analysis.creatorFundingChain.map((entry) => entry.funderName ?? entry.funderType ?? entry.funder).join(" -> ")
-      : "unknown";
+  const firstTxFee = analysis.firstTxFee;
 
   return [
     `${token.symbol} (${token.address})`,
@@ -146,10 +157,15 @@ function summarizeCandidate(candidate: CandidateResult): string {
     `creator_funder_name=${analysis.creatorFunding?.funderName ?? "unknown"}`,
     `creator_funder_type=${analysis.creatorFunding?.funderType ?? "unknown"}`,
     `exchange_match=${exchangeLabel}`,
-    `exchange_hop=${exchangeHop}`,
-    `creator_funding_path=${creatorFundingPath}`,
-    `token_funded_by=${tokenFundingFrom}`,
-    `token_funding_time=${tokenFundingTime}`,
+    `dev_created_tokens=${analysis.devCreatedTokenCount ?? "unknown"}`,
+    `first_tx_signature=${firstTxFee?.signature ?? "unknown"}`,
+    `first_tx_fee_lamports=${firstTxFee?.firstTxFeeLamports ?? "unknown"}`,
+    `priority_fee_sol=${firstTxFee?.priorityFeeSol ?? "unknown"}`,
+    `total_fee_sol=${firstTxFee?.totalFeeSol ?? "unknown"}`,
+    `fee_difference_sol=${firstTxFee?.totalMinusPriorityFeeSol ?? "unknown"}`,
+    `tip_fee_sol=${firstTxFee?.tipFeeSol ?? "unknown"}`,
+    `native_transfer_count=${firstTxFee?.nativeTransferCount ?? "unknown"}`,
+    `pattern_address=${firstTxFee?.nativePatternAddress ?? "unknown"}`,
     `funding_lag=${lag}`,
     `min_funding=${minFunding}`,
     `max_funding=${maxFunding}`,
@@ -163,8 +179,8 @@ export async function processNewTokenEvent(event: PumpPortalNewTokenEvent): Prom
   logDebug(`Received PumpPortal launch event for ${eventMint}.`);
 
   const normalized = await normalizePumpPortalToken(event);
-  if (!normalized) {
-    logDebug(`Skipping ${eventMint}: missing mint or creator in launch payload.`);
+  if ("skipped" in normalized) {
+    logDebug(`Skipping ${eventMint}: ${normalized.reason}.`);
     return;
   }
 
@@ -183,66 +199,195 @@ export async function processNewTokenEvent(event: PumpPortalNewTokenEvent): Prom
     return;
   }
 
-  logDebug(`Enriching socials from GMGN fallback for ${getTokenLabel(normalized.token)}.`);
-  const token = await enrichTokenWithGmgnSocials(normalized.token);
-  logDebug(
-    `Social sources for ${getTokenLabel(token)}: telegram=${token.telegram ? "yes" : "no"} twitter=${token.twitter ? "yes" : "no"} website=${token.website ? "yes" : "no"}.`,
-  );
-
-  const socialDecision = shouldKeepSocial(token);
-  if (!socialDecision.keep) {
-    logDebug(`Social filter rejected ${getTokenLabel(token)}: ${socialDecision.reasons.join(", ")}.`);
-    return;
-  }
-
-  logSignal(`${getTokenLabel(token)} passed socials, checking Helius`);
+  const token = normalized.token;
   logDebug(`Starting Helius checks for ${getTokenLabel(token)}.`);
   const { candidate, reasons } = await buildCandidate(token);
   if (!candidate) {
-    logInfo(`Helius filters rejected ${getTokenLabel(token)}: ${reasons.join(", ")}.`);
-    logDebug(`Helius filters rejected ${getTokenLabel(token)}.`);
+    logDebug(`Exchange/dev-count filters rejected ${getTokenLabel(token)}: ${reasons.join(", ")}.`);
     return;
   }
 
-  logDebug(`Helius filters passed for ${getTokenLabel(token)}.`);
-  logInfo(`Helius filters passed for ${getTokenLabel(token)}.`);
+  logSignal(`${getTokenLabel(token)} passed all Helius, dev-count, and pattern-address filters`);
+  logDebug(`All filters passed for ${getTokenLabel(token)}.`);
+  logInfo(`All filters passed for ${getTokenLabel(token)}.`);
   logFound(getTokenLabel(token));
   console.log(summarizeCandidate(candidate));
+  await recordFirstTxPattern(candidate);
   await maybeExecuteBuys([candidate]);
 }
 
-async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: CandidateResult | null; reasons: string[] }> {
-  const [creatorBalances, creatorFunding, tokenFunding] = await Promise.all([
-    fetchWalletBalances(token.creator),
-    fetchFundedBy(token.creator),
-    fetchFundedBy(token.address),
-  ]);
-  const fundingChain = await resolveCreatorFundingChain(creatorFunding);
-  const analysis = analyzeCreatorFunding(
-    token,
-    creatorBalances,
-    creatorFunding,
-    tokenFunding,
-    fundingChain.chain,
-    fundingChain.matchedExchangeType,
-    fundingChain.matchedExchangeHop,
-  );
-  const candidate: CandidateResult = { token, analysis, reasons: [] };
-  const fundingDecision = shouldKeepFunding(candidate);
-  if (!fundingDecision.keep) {
-    logDebug(`Funding analysis for ${getTokenLabel(token)}: ${fundingDecision.reasons.join(", ")}.`);
-  } else {
-    logDebug(
-      `Funding analysis passed for ${getTokenLabel(token)}: lag=${analysis.fundingLagHours ?? "n/a"}h min=${analysis.minFundingSol ?? "n/a"} max=${analysis.maxFundingSol ?? "n/a"} exchange=${analysis.matchedExchangeType ?? "none"} fresh=${analysis.isFreshWallet}.`,
+async function recordFirstTxPattern(candidate: CandidateResult): Promise<void> {
+  const patternAddress = candidate.analysis.firstTxFee?.nativePatternAddress;
+  const signature = candidate.analysis.firstTxFee?.signature;
+  if (!patternAddress || !signature) {
+    return;
+  }
+
+  const state = await FirstTxPatternState.create();
+  const matches = state.getMatches(patternAddress).filter((match) => match.tokenMint !== candidate.token.address);
+  if (matches.length > 0) {
+    logInfo(
+      `Pattern address ${patternAddress} was already seen on ${matches.length} passed token(s): ${matches
+        .map((match) => `${match.symbol}:${match.tokenMint}`)
+        .join(", ")}`,
     );
   }
 
-  if (!fundingDecision.keep) {
+  await state.record(patternAddress, candidate.token.address, candidate.token.symbol || candidate.token.name || "unknown", signature);
+}
+
+async function getPreviousPatternMatches(candidate: CandidateResult): Promise<Array<{ tokenMint: string; symbol: string; seenAt: string; signature: string }>> {
+  const patternAddress = candidate.analysis.firstTxFee?.nativePatternAddress;
+  if (!patternAddress) {
+    return [];
+  }
+
+  const state = await FirstTxPatternState.create();
+  return state.getMatches(patternAddress).filter((match) => match.tokenMint !== candidate.token.address);
+}
+
+async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: CandidateResult | null; reasons: string[] }> {
+  let creatorFunding;
+
+  try {
+    creatorFunding = await fetchFundedBy(token.creator);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
       candidate: null,
-      reasons: fundingDecision.reasons,
+      reasons: [`creator funded-by lookup failed: ${message}`],
     };
   }
+
+  const fundingChain = await resolveCreatorFundingChain(creatorFunding);
+  if (config.filters.requireExchangeFunder && !fundingChain.matchedExchangeType) {
+    return {
+      candidate: null,
+      reasons: ["creator funding source is not a centralized exchange"],
+    };
+  }
+
+  const fundingAmount = creatorFunding?.symbol === "SOL" ? creatorFunding.amount : null;
+  if (fundingAmount === null) {
+    return {
+      candidate: null,
+      reasons: ["creator funding amount is missing or not SOL"],
+    };
+  }
+
+  if (fundingAmount < config.filters.minFundingSol || fundingAmount > config.filters.maxFundingSol) {
+    return {
+      candidate: null,
+      reasons: [`creator funding amount is ${fundingAmount} SOL`],
+    };
+  }
+
+  const fundingLagHours = creatorFunding ? (token.created_timestamp - creatorFunding.timestamp) / 3600 : null;
+  if (fundingLagHours === null) {
+    return {
+      candidate: null,
+      reasons: ["creator funding time could not be calculated"],
+    };
+  }
+
+  if (
+    fundingLagHours < config.filters.minFundingHoursBeforeCreation ||
+    fundingLagHours > config.filters.maxFundingHoursBeforeCreation
+  ) {
+    return {
+      candidate: null,
+      reasons: [`creator funding lag is ${fundingLagHours.toFixed(4)} hours`],
+    };
+  }
+
+  let firstTxFee: TokenFirstTxFeeAnalysis | null = null;
+  let firstTxReason: string | null = null;
+  let devCreatedTokenCount = 0;
+  try {
+    const firstTxResult = await fetchDevCreateTransactionFeeAnalysis(token.creator, token.address);
+    firstTxFee = firstTxResult.analysis;
+    firstTxReason = firstTxResult.reason;
+    devCreatedTokenCount = firstTxResult.devCreatedTokenCount;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      candidate: null,
+      reasons: [`dev CREATE Helius lookup failed: ${message}`],
+    };
+  }
+
+  if (!firstTxFee) {
+    return {
+      candidate: null,
+      reasons: [`first token transaction fee could not be verified: ${firstTxReason ?? "unknown reason"}`],
+    };
+  }
+
+  if (devCreatedTokenCount > config.filters.maxDevCreatedTokens) {
+    return {
+      candidate: null,
+      reasons: [`dev created token count is ${devCreatedTokenCount}`],
+    };
+  }
+
+  const nativePatternReasons = getNativeTransferPatternReasons(firstTxFee);
+  if (nativePatternReasons.length > 0) {
+    return {
+      candidate: null,
+      reasons: nativePatternReasons,
+    };
+  }
+
+  logSignal(`${getTokenLabel(token)} passed native-transfer pattern filter`);
+  logInfo(
+    `${getTokenLabel(token)} native pattern passed: transfers=${firstTxFee.nativeTransferCount}, pattern_address=${firstTxFee.nativePatternAddress ?? "unknown"}, first_tx=${firstTxFee.signature}`,
+  );
+
+  const feeAndTipReasons = getFirstTxFeeAndTipReasons(firstTxFee);
+  if (feeAndTipReasons.length > 0) {
+    logInfo(`${getTokenLabel(token)} rejected after native pattern pass: ${feeAndTipReasons.join(", ")}`);
+    return {
+      candidate: null,
+      reasons: feeAndTipReasons,
+    };
+  }
+
+  logSignal(`${getTokenLabel(token)} passed fee/tip filters; checking dev count`);
+  logInfo(
+    `${getTokenLabel(token)} fee/tip passed: fee=${firstTxFee.firstTxFeeLamports ?? "unknown"} lamports, priority=${firstTxFee.priorityFeeSol ?? "unknown"} SOL, fee_difference=${firstTxFee.totalMinusPriorityFeeSol ?? "unknown"} SOL, tip=${firstTxFee.tipFeeSol ?? "unknown"} SOL`,
+  );
+
+  const analysis = analyzeCreatorFunding(
+    token,
+    null,
+    creatorFunding,
+    null,
+    fundingChain.chain,
+    fundingChain.matchedExchangeType,
+    fundingChain.matchedExchangeHop,
+    devCreatedTokenCount,
+    firstTxFee,
+  );
+  const candidate: CandidateResult = { token, analysis, reasons: [] };
+  logInfo(`${getTokenLabel(token)} checking pattern-address uniqueness for ${firstTxFee.nativePatternAddress}`);
+  const previousPatternMatches = await getPreviousPatternMatches(candidate);
+  if (previousPatternMatches.length > 0) {
+    logInfo(
+      `${getTokenLabel(token)} rejected after Helius pass: pattern address ${firstTxFee.nativePatternAddress} already seen on ${previousPatternMatches.length} successful token(s)`,
+    );
+    return {
+      candidate: null,
+      reasons: [
+        `pattern address ${firstTxFee.nativePatternAddress} already seen on ${previousPatternMatches.length} successful token(s)`,
+      ],
+    };
+  }
+
+  logInfo(`${getTokenLabel(token)} pattern-address uniqueness passed`);
+
+  logDebug(
+    `Funding analysis passed for ${getTokenLabel(token)}: lag=${analysis.fundingLagHours ?? "n/a"}h min=${analysis.minFundingSol ?? "n/a"} max=${analysis.maxFundingSol ?? "n/a"} exchange=${analysis.matchedExchangeType ?? "none"} devCreatedTokens=${analysis.devCreatedTokenCount ?? "unknown"} firstTxFee=${analysis.firstTxFee?.firstTxFeeLamports ?? "unknown"} feeDiff=${analysis.firstTxFee?.totalMinusPriorityFeeSol ?? "unknown"} patternAddress=${analysis.firstTxFee?.nativePatternAddress ?? "unknown"}.`,
+  );
 
   return {
     candidate,
