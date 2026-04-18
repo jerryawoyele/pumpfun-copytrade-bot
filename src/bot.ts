@@ -1,5 +1,6 @@
 import { fetchDevCreateTransactionFeeAnalysis, fetchFundedBy } from "./clients/helius.js";
 import { canExecuteLiveBuy, createUltraOrder, executeUltraOrder } from "./clients/jupiter.js";
+import { enrichTokenWithGmgnSocials } from "./clients/gmgn.js";
 import { normalizePumpPortalToken } from "./clients/pumpportal.js";
 import { config } from "./config.js";
 import { analyzeCreatorFunding, getXCommunityLink } from "./filters.js";
@@ -151,6 +152,8 @@ function summarizeCandidate(candidate: CandidateResult): string {
     `${token.symbol} (${token.address})`,
     `creator=${token.creator}`,
     `telegram=${token.telegram}`,
+    `twitter=${token.twitter}`,
+    `website=${token.website}`,
     `x_community=${xCommunity}`,
     `creator_funded_by=${fundingFrom}`,
     `creator_funding_time=${fundingTime}`,
@@ -210,10 +213,31 @@ export async function processNewTokenEvent(event: PumpPortalNewTokenEvent): Prom
   logSignal(`${getTokenLabel(token)} passed all Helius, dev-count, and pattern-address filters`);
   logDebug(`All filters passed for ${getTokenLabel(token)}.`);
   logInfo(`All filters passed for ${getTokenLabel(token)}.`);
-  logFound(getTokenLabel(token));
-  console.log(summarizeCandidate(candidate));
-  await recordFirstTxPattern(candidate);
-  await maybeExecuteBuys([candidate]);
+  const enrichedCandidate = await enrichSuccessfulCandidateSocials(candidate);
+  logFound(getTokenLabel(enrichedCandidate.token));
+  console.log(summarizeCandidate(enrichedCandidate));
+  await recordFirstTxPattern(enrichedCandidate);
+  await maybeExecuteBuys([enrichedCandidate]);
+}
+
+async function enrichSuccessfulCandidateSocials(candidate: CandidateResult): Promise<CandidateResult> {
+  const tokenBefore = candidate.token;
+  const enrichedToken = await enrichTokenWithGmgnSocials(tokenBefore);
+  const gainedSocial =
+    (!tokenBefore.telegram && enrichedToken.telegram) ||
+    (!tokenBefore.twitter && enrichedToken.twitter) ||
+    (!tokenBefore.website && enrichedToken.website);
+
+  if (gainedSocial) {
+    logInfo(
+      `${getTokenLabel(enrichedToken)} socials enriched: telegram=${enrichedToken.telegram || "unknown"}, twitter=${enrichedToken.twitter || "unknown"}, website=${enrichedToken.website || "unknown"}`,
+    );
+  }
+
+  return {
+    ...candidate,
+    token: enrichedToken,
+  };
 }
 
 async function recordFirstTxPattern(candidate: CandidateResult): Promise<void> {
