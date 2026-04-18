@@ -248,19 +248,27 @@ async function analyzeFirstTokenTransaction(firstTx: HeliusEnhancedTransaction):
   }
 
   const nativeTransfers = firstTx.nativeTransfers ?? [];
-  const seventhAmount = nativeTransfers[6]?.amount;
+  const secondToLastTransfer = nativeTransfers[nativeTransfers.length - 2];
   const largestAmount =
     nativeTransfers.length > 0
       ? Math.max(...nativeTransfers.map((transfer) => (typeof transfer.amount === "number" ? transfer.amount : Number.NEGATIVE_INFINITY)))
       : null;
+  const hasSupportedTransferLength = nativeTransfers.length === 8 || nativeTransfers.length === 10;
+  const sharedPatternAddress =
+    nativeTransfers.length === 8
+      ? nativeTransfers[5]?.toUserAccount ?? null
+      : nativeTransfers[6]?.toUserAccount && nativeTransfers[6]?.toUserAccount === nativeTransfers[7]?.toUserAccount
+        ? nativeTransfers[6]?.toUserAccount
+        : null;
   const nativePatternMatched =
-    nativeTransfers.length === 8 &&
+    hasSupportedTransferLength &&
     Boolean(nativeTransfers[0]?.toUserAccount) &&
     nativeTransfers[0]?.toUserAccount === nativeTransfers[3]?.toUserAccount &&
     nativeTransfers[2]?.amount === 2074080 &&
     nativeTransfers[4]?.amount === 2074080 &&
-    typeof seventhAmount === "number" &&
-    seventhAmount === largestAmount;
+    typeof secondToLastTransfer?.amount === "number" &&
+    secondToLastTransfer.amount === largestAmount &&
+    Boolean(sharedPatternAddress);
 
   const feeDissection = await fetchTransactionFeeDissection(firstTx.signature);
   const totalFeeLamports = feeDissection.totalFeeLamports ?? (typeof firstTx.fee === "number" ? firstTx.fee : null);
@@ -292,7 +300,7 @@ async function analyzeFirstTokenTransaction(firstTx: HeliusEnhancedTransaction):
     firstTxFeeLamports: totalFeeLamports,
     nativeTransferCount: nativeTransfers.length,
     nativePatternMatched,
-    nativePatternAddress: nativePatternMatched ? nativeTransfers[5]?.toUserAccount ?? null : null,
+    nativePatternAddress: nativePatternMatched ? sharedPatternAddress : null,
   };
 }
 
