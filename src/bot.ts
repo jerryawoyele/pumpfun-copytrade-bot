@@ -436,20 +436,13 @@ async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: Cand
   const previousPatternMatches = await getPreviousPatternMatches(candidate);
   if (previousPatternMatches.length > 0) {
     logInfo(
-      `${getTokenLabel(token)} rejected at pattern-address uniqueness: pattern_address=${firstTxFee.nativePatternAddress} already seen on ${previousPatternMatches.length} successful token(s)`,
+      `${getTokenLabel(token)} pattern-address was already seen: pattern_address=${firstTxFee.nativePatternAddress}, previous_successful_matches=${previousPatternMatches.length}. Keeping as log-only signal.`,
     );
-    logCandidateBlockEnd(token, "FAILED", "pattern_address_uniqueness", [
-      `pattern address ${firstTxFee.nativePatternAddress} already seen on ${previousPatternMatches.length} successful token(s)`,
-    ]);
-    return {
-      candidate: null,
-      reasons: [
-        `pattern address ${firstTxFee.nativePatternAddress} already seen on ${previousPatternMatches.length} successful token(s)`,
-      ],
-    };
+  } else {
+    logInfo(
+      `${getTokenLabel(token)} pattern-address uniqueness passed: pattern_address=${firstTxFee.nativePatternAddress}, previous_successful_matches=0`,
+    );
   }
-
-  logInfo(`${getTokenLabel(token)} pattern-address uniqueness passed: pattern_address=${firstTxFee.nativePatternAddress}, previous_successful_matches=0`);
 
   logDebug(
     `Funding analysis passed for ${getTokenLabel(token)}: lag=${analysis.fundingLagHours ?? "n/a"}h min=${analysis.minFundingSol ?? "n/a"} max=${analysis.maxFundingSol ?? "n/a"} exchange=${analysis.matchedExchangeType ?? "none"} devCreatedTokens=${analysis.devCreatedTokenCount ?? "unknown"} firstTxFee=${analysis.firstTxFee?.firstTxFeeLamports ?? "unknown"} feeDiff=${analysis.firstTxFee?.totalMinusPriorityFeeSol ?? "unknown"} patternAddress=${analysis.firstTxFee?.nativePatternAddress ?? "unknown"}.`,
