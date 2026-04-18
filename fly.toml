@@ -1,4 +1,4 @@
-app = "pumpfun-worker-bot"
+app = "pumpfun-copytrade-bot"
 primary_region = "fra"
 kill_signal = "SIGINT"
 kill_timeout = "30s"
