@@ -125,6 +125,10 @@ export interface HeliusEnhancedTransaction {
   instructions?: Array<{
     programId?: string;
     data?: string;
+    innerInstructions?: Array<{
+      programId?: string;
+      data?: string;
+    }>;
   }>;
   [key: string]: unknown;
 }
@@ -151,6 +155,10 @@ export interface TokenFirstTxFeeAnalysis {
   nativeTransferCount: number;
   nativePatternMatched: boolean;
   nativePatternAddress: string | null;
+  patternNextTxSignature: string | null;
+  patternNextTxTimestamp: number | null;
+  patternNextTxFeePayer: string | null;
+  patternNextTxProgramCount: number | null;
 }
 
 export interface CreatorFundingAnalysis {

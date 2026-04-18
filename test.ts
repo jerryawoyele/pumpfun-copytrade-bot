@@ -1,4 +1,4 @@
-import { fetchDevCreateTransactionFeeAnalysis, fetchFundedBy } from "./src/clients/helius.js";
+import { fetchDevCreateTransactionFeeAnalysis, fetchFundedBy, fetchNextPatternAddressTransaction } from "./src/clients/helius.js";
 import { config } from "./src/config.js";
 import { FirstTxPatternState } from "./src/state.js";
 import type { HeliusFundedByResponse, TokenFirstTxFeeAnalysis } from "./src/types.js";
@@ -183,6 +183,53 @@ async function main(): Promise<void> {
       ? `transfers=${firstTxResult.analysis.nativeTransferCount}, pattern_address=${firstTxResult.analysis.nativePatternAddress}`
       : nativeReasons.join(", "),
   );
+
+  if (nativeReasons.length === 0 && firstTxResult.analysis.nativePatternAddress) {
+    const nextPatternTx = await fetchNextPatternAddressTransaction(
+      firstTxResult.analysis.nativePatternAddress,
+      firstTxResult.analysis.signature,
+      tokenMint,
+      creator,
+    );
+    addStep(
+      steps,
+      "next pattern-address transaction",
+      Boolean(nextPatternTx.transaction?.signature),
+      nextPatternTx.transaction?.signature
+        ? `signature=${nextPatternTx.transaction.signature}, time=${nextPatternTx.transaction.timestamp ? new Date(nextPatternTx.transaction.timestamp * 1000).toISOString() : "unknown"}, fee_payer=${nextPatternTx.transaction.feePayer ?? "unknown"}`
+        : "no fee-payer buy transaction returned in post-create window",
+    );
+
+    addStep(
+      steps,
+      "next pattern-address tx program count",
+      nextPatternTx.programCount === 5 || nextPatternTx.programCount === 7,
+      `program_count=${nextPatternTx.programCount ?? "unknown"}, required=5 or 7`,
+    );
+
+    if (nextPatternTx.transaction?.feePayer) {
+      addStep(
+        steps,
+        "next pattern-address tx fee payer is not creator",
+        nextPatternTx.transaction.feePayer !== creator,
+        nextPatternTx.transaction.feePayer === creator
+          ? "fee payer is the token creator"
+          : `fee_payer=${nextPatternTx.transaction.feePayer}, creator=${creator}`,
+      );
+
+      const feePayerReceivesToken = nextPatternTx.transaction.tokenTransfers?.some(
+        (transfer) => transfer.mint === tokenMint && transfer.toUserAccount === nextPatternTx.transaction?.feePayer,
+      );
+      addStep(
+        steps,
+        "next pattern-address tx is fee-payer buy",
+        Boolean(feePayerReceivesToken),
+        feePayerReceivesToken
+          ? "fee payer receives this token in tokenTransfers"
+          : "fee payer does not receive this token in tokenTransfers",
+      );
+    }
+  }
 
   const feeReasons = getFeeAndTipReasons(firstTxResult.analysis);
   addStep(

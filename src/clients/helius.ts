@@ -162,6 +162,58 @@ async function fetchDevCreateTransactions(creator: string): Promise<HeliusEnhanc
   }
 }
 
+export async function fetchNextPatternAddressTransaction(
+  patternAddress: string,
+  afterSignature: string,
+  tokenMint: string,
+  creator: string,
+): Promise<{ transaction: HeliusEnhancedTransaction | null; programCount: number | null }> {
+  const params = new URLSearchParams({
+    "token-accounts": "none",
+    "sort-order": "asc",
+    "api-key": config.helius.apiKey,
+    limit: "20",
+    "after-signature": afterSignature,
+  });
+
+  const url = `${ENHANCED_RPC_URL}/v0/addresses/${patternAddress}/transactions?${params.toString()}`;
+  try {
+    const transactions = await heliusFetch<HeliusEnhancedTransaction[]>(url);
+    const transaction =
+      transactions.find(
+        (tx) =>
+          tx.feePayer &&
+          tx.feePayer !== creator &&
+          tx.tokenTransfers?.some((transfer) => transfer.mint === tokenMint && transfer.toUserAccount === tx.feePayer),
+      ) ?? null;
+    return {
+      transaction,
+      programCount: transaction ? countUniquePrograms(transaction) : null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`pattern-address next transaction fetch failed: ${message}`);
+  }
+}
+
+function countUniquePrograms(transaction: HeliusEnhancedTransaction): number {
+  const programs = new Set<string>();
+
+  for (const instruction of transaction.instructions ?? []) {
+    if (instruction.programId) {
+      programs.add(instruction.programId);
+    }
+
+    for (const innerInstruction of instruction.innerInstructions ?? []) {
+      if (innerInstruction.programId) {
+        programs.add(innerInstruction.programId);
+      }
+    }
+  }
+
+  return programs.size;
+}
+
 async function fetchTransactionFeeDissection(signature: string, retryCount = 2): Promise<{
   computeUnitLimit: number | null;
   computeUnitPriceMicroLamports: number | null;
@@ -301,6 +353,10 @@ async function analyzeFirstTokenTransaction(firstTx: HeliusEnhancedTransaction):
     nativeTransferCount: nativeTransfers.length,
     nativePatternMatched,
     nativePatternAddress: nativePatternMatched ? sharedPatternAddress : null,
+    patternNextTxSignature: null,
+    patternNextTxTimestamp: null,
+    patternNextTxFeePayer: null,
+    patternNextTxProgramCount: null,
   };
 }
 

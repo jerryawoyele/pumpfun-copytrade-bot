@@ -1,9 +1,9 @@
-import { fetchDevCreateTransactionFeeAnalysis, fetchFundedBy } from "./clients/helius.js";
+import { fetchDevCreateTransactionFeeAnalysis, fetchFundedBy, fetchNextPatternAddressTransaction } from "./clients/helius.js";
 import { canExecuteLiveBuy, createUltraOrder, executeUltraOrder } from "./clients/jupiter.js";
 import { enrichTokenWithGmgnSocials } from "./clients/gmgn.js";
 import { normalizePumpPortalToken } from "./clients/pumpportal.js";
 import { config } from "./config.js";
-import { analyzeCreatorFunding, getXCommunityLink } from "./filters.js";
+import { analyzeCreatorFunding, getXCommunityLink, isXCommunityUrl } from "./filters.js";
 import { logDebug, logFound, logInfo, logSignal, logSuccess, logWarn } from "./logger.js";
 import { BuyState, FirstTxPatternState } from "./state.js";
 import type { CandidateResult, GmgnTrenchToken, HeliusFundedByResponse, PumpPortalNewTokenEvent, TokenFirstTxFeeAnalysis } from "./types.js";
@@ -145,6 +145,7 @@ function summarizeCandidate(candidate: CandidateResult): string {
   const maxFunding = analysis.maxFundingSol === null ? "n/a" : `${analysis.maxFundingSol.toFixed(3)} SOL`;
   const fundingTime = fundingAt > 0 ? new Date(fundingAt * 1000).toISOString() : "unknown";
   const xCommunity = getXCommunityLink(token) ?? "unknown";
+  const x = token.twitter && !isXCommunityUrl(token.twitter) ? token.twitter : "unknown";
   const exchangeLabel = analysis.matchedExchangeType ?? "unlabeled";
   const firstTxFee = analysis.firstTxFee;
 
@@ -152,7 +153,7 @@ function summarizeCandidate(candidate: CandidateResult): string {
     `${token.symbol} (${token.address})`,
     `creator=${token.creator}`,
     `telegram=${token.telegram}`,
-    `twitter=${token.twitter}`,
+    `x=${x}`,
     `website=${token.website}`,
     `x_community=${xCommunity}`,
     `creator_funded_by=${fundingFrom}`,
@@ -169,6 +170,10 @@ function summarizeCandidate(candidate: CandidateResult): string {
     `tip_fee_sol=${firstTxFee?.tipFeeSol ?? "unknown"}`,
     `native_transfer_count=${firstTxFee?.nativeTransferCount ?? "unknown"}`,
     `pattern_address=${firstTxFee?.nativePatternAddress ?? "unknown"}`,
+    `pattern_next_tx_signature=${firstTxFee?.patternNextTxSignature ?? "unknown"}`,
+    `pattern_next_tx_time=${firstTxFee?.patternNextTxTimestamp ? new Date(firstTxFee.patternNextTxTimestamp * 1000).toISOString() : "unknown"}`,
+    `pattern_next_tx_fee_payer=${firstTxFee?.patternNextTxFeePayer ?? "unknown"}`,
+    `pattern_next_tx_program_count=${firstTxFee?.patternNextTxProgramCount ?? "unknown"}`,
     `funding_lag=${lag}`,
     `min_funding=${minFunding}`,
     `max_funding=${maxFunding}`,
@@ -367,6 +372,19 @@ async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: Cand
     `${getTokenLabel(token)} native pattern passed: transfers=${firstTxFee.nativeTransferCount}, pattern_address=${firstTxFee.nativePatternAddress ?? "unknown"}, first_tx=${firstTxFee.signature}`,
   );
 
+  const nextPatternTxReasons = await applyNextPatternTransactionFilters(token, firstTxFee);
+  if (nextPatternTxReasons.length > 0) {
+    logInfo(`${getTokenLabel(token)} rejected after native pattern pass: ${nextPatternTxReasons.join(", ")}`);
+    return {
+      candidate: null,
+      reasons: nextPatternTxReasons,
+    };
+  }
+
+  logInfo(
+    `${getTokenLabel(token)} next pattern-address tx passed: signature=${firstTxFee.patternNextTxSignature}, time=${firstTxFee.patternNextTxTimestamp ? new Date(firstTxFee.patternNextTxTimestamp * 1000).toISOString() : "unknown"}, fee_payer=${firstTxFee.patternNextTxFeePayer}, programs=${firstTxFee.patternNextTxProgramCount}`,
+  );
+
   const feeAndTipReasons = getFirstTxFeeAndTipReasons(firstTxFee);
   if (feeAndTipReasons.length > 0) {
     logInfo(`${getTokenLabel(token)} rejected after native pattern pass: ${feeAndTipReasons.join(", ")}`);
@@ -393,11 +411,11 @@ async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: Cand
     firstTxFee,
   );
   const candidate: CandidateResult = { token, analysis, reasons: [] };
-  logInfo(`${getTokenLabel(token)} checking pattern-address uniqueness for ${firstTxFee.nativePatternAddress}`);
+  logInfo(`${getTokenLabel(token)} checking pattern-address uniqueness: pattern_address=${firstTxFee.nativePatternAddress}`);
   const previousPatternMatches = await getPreviousPatternMatches(candidate);
   if (previousPatternMatches.length > 0) {
     logInfo(
-      `${getTokenLabel(token)} rejected after Helius pass: pattern address ${firstTxFee.nativePatternAddress} already seen on ${previousPatternMatches.length} successful token(s)`,
+      `${getTokenLabel(token)} rejected at pattern-address uniqueness: pattern_address=${firstTxFee.nativePatternAddress} already seen on ${previousPatternMatches.length} successful token(s)`,
     );
     return {
       candidate: null,
@@ -407,7 +425,7 @@ async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: Cand
     };
   }
 
-  logInfo(`${getTokenLabel(token)} pattern-address uniqueness passed`);
+  logInfo(`${getTokenLabel(token)} pattern-address uniqueness passed: pattern_address=${firstTxFee.nativePatternAddress}, previous_successful_matches=0`);
 
   logDebug(
     `Funding analysis passed for ${getTokenLabel(token)}: lag=${analysis.fundingLagHours ?? "n/a"}h min=${analysis.minFundingSol ?? "n/a"} max=${analysis.maxFundingSol ?? "n/a"} exchange=${analysis.matchedExchangeType ?? "none"} devCreatedTokens=${analysis.devCreatedTokenCount ?? "unknown"} firstTxFee=${analysis.firstTxFee?.firstTxFeeLamports ?? "unknown"} feeDiff=${analysis.firstTxFee?.totalMinusPriorityFeeSol ?? "unknown"} patternAddress=${analysis.firstTxFee?.nativePatternAddress ?? "unknown"}.`,
@@ -417,6 +435,54 @@ async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: Cand
     candidate,
     reasons: [],
   };
+}
+
+async function applyNextPatternTransactionFilters(token: GmgnTrenchToken, firstTxFee: TokenFirstTxFeeAnalysis): Promise<string[]> {
+  const patternAddress = firstTxFee.nativePatternAddress;
+  if (!patternAddress) {
+    return ["pattern address is missing"];
+  }
+
+  let nextTxResult;
+  try {
+    nextTxResult = await fetchNextPatternAddressTransaction(patternAddress, firstTxFee.signature, token.address, token.creator);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return [`next pattern-address transaction lookup failed: ${message}`];
+  }
+
+  const nextTx = nextTxResult.transaction;
+  if (!nextTx?.signature) {
+    return ["next pattern-address buy transaction was not found in the post-create window"];
+  }
+
+  firstTxFee.patternNextTxSignature = nextTx.signature;
+  firstTxFee.patternNextTxTimestamp = nextTx.timestamp ?? null;
+  firstTxFee.patternNextTxFeePayer = nextTx.feePayer ?? null;
+  firstTxFee.patternNextTxProgramCount = nextTxResult.programCount;
+
+  const reasons: string[] = [];
+  if (nextTxResult.programCount !== 5 && nextTxResult.programCount !== 7) {
+    reasons.push(`next pattern-address transaction program count is ${nextTxResult.programCount ?? "unknown"}, required=5 or 7`);
+  }
+
+  if (!nextTx.feePayer) {
+    reasons.push("next pattern-address transaction fee payer is missing");
+    return reasons;
+  }
+
+  if (nextTx.feePayer === token.creator) {
+    reasons.push("next pattern-address transaction fee payer is the token creator");
+  }
+
+  const feePayerReceivesToken = nextTx.tokenTransfers?.some(
+    (transfer) => transfer.mint === token.address && transfer.toUserAccount === nextTx.feePayer,
+  );
+  if (!feePayerReceivesToken) {
+    reasons.push("next pattern-address transaction is not a fee-payer buy for this token");
+  }
+
+  return reasons;
 }
 
 async function maybeExecuteBuys(results: CandidateResult[]): Promise<void> {
