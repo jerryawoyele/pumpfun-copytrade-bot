@@ -12,6 +12,19 @@ let heartbeatInterval: NodeJS.Timeout | null = null;
 let pongTimeout: NodeJS.Timeout | null = null;
 let heartbeatResetTimer: NodeJS.Timeout | null = null;
 const inFlightMints = new Set<string>();
+let lastOutsideRunWindowLogAt = 0;
+
+function getRuntimeSnapshot(): string {
+  const localTime = new Intl.DateTimeFormat("en-GB", {
+    timeZone: config.runtime.timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date());
+
+  return `run_window=${config.runtime.runWindowStart}-${config.runtime.runWindowEnd} timezone=${config.runtime.timezone} local_time=${localTime}`;
+}
 
 function scheduleReconnect(): void {
   if (reconnectTimer) {
@@ -105,7 +118,12 @@ function startHeartbeat(currentSocket: WebSocket): void {
 
 async function ensureConnection(): Promise<void> {
   if (!isWithinRunWindow()) {
-    logDebug("Outside configured run window, ensuring PumpPortal socket stays closed.");
+    const now = Date.now();
+    if (now - lastOutsideRunWindowLogAt >= 60000) {
+      logInfo(`Outside configured run window; PumpPortal socket will stay closed. ${getRuntimeSnapshot()}`);
+      lastOutsideRunWindowLogAt = now;
+    }
+
     closeSocket();
     return;
   }
@@ -163,6 +181,10 @@ async function ensureConnection(): Promise<void> {
 
 async function main(): Promise<void> {
   const once = process.argv.includes("--once");
+
+  logInfo(
+    `Bot booted. ${getRuntimeSnapshot()} live_buy=${config.jupiter.enableLiveBuy} debug_pipeline=${config.runtime.debugPipeline}`,
+  );
 
   if (once) {
     if (!isWithinRunWindow()) {

@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 import { config } from "../config.js";
+import { logInfo } from "../logger.js";
 import type {
   GmgnTrenchToken,
   NormalizedPumpPortalTokenResult,
@@ -154,6 +155,7 @@ export function connectPumpPortal(onEvent: (event: PumpPortalNewTokenEvent) => v
 
   ws.on("open", () => {
     ws.send(JSON.stringify({ method: "subscribeNewToken" }));
+    logInfo("PumpPortal WebSocket connected and subscribed to new tokens.");
   });
 
   ws.on("message", (data) => {
