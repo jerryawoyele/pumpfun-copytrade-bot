@@ -172,7 +172,7 @@ export async function fetchNextPatternAddressTransaction(
     "token-accounts": "none",
     "sort-order": "asc",
     "api-key": config.helius.apiKey,
-    limit: "20",
+    limit: "1",
     "after-signature": afterSignature,
   });
 
