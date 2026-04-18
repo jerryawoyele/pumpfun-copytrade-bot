@@ -9,9 +9,26 @@ import { BuyState, FirstTxPatternState } from "./state.js";
 import type { CandidateResult, GmgnTrenchToken, HeliusFundedByResponse, PumpPortalNewTokenEvent, TokenFirstTxFeeAnalysis } from "./types.js";
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
+const CANDIDATE_LOG_DIVIDER = "=".repeat(96);
 
 function getTokenLabel(token: Pick<GmgnTrenchToken, "symbol" | "name" | "address">): string {
   return `${token.symbol || token.name || "unknown"} ${token.address}`;
+}
+
+function logCandidateBlockStart(token: Pick<GmgnTrenchToken, "symbol" | "name" | "address">): void {
+  logInfo(`${CANDIDATE_LOG_DIVIDER}`);
+  logInfo(`CANDIDATE START | ${getTokenLabel(token)}`);
+}
+
+function logCandidateBlockEnd(
+  token: Pick<GmgnTrenchToken, "symbol" | "name" | "address">,
+  status: "PASSED" | "FAILED",
+  stage: string,
+  reasons: string[] = [],
+): void {
+  const reasonText = reasons.length > 0 ? ` | reasons=${reasons.join("; ")}` : "";
+  logInfo(`CANDIDATE END | ${status} | ${getTokenLabel(token)} | stage=${stage}${reasonText}`);
+  logInfo(`${CANDIDATE_LOG_DIVIDER}`);
 }
 
 function getExchangeTypeForFunding(funding: HeliusFundedByResponse | null): string | null {
@@ -223,6 +240,7 @@ export async function processNewTokenEvent(event: PumpPortalNewTokenEvent): Prom
   console.log(summarizeCandidate(enrichedCandidate));
   await recordFirstTxPattern(enrichedCandidate);
   await maybeExecuteBuys([enrichedCandidate]);
+  logCandidateBlockEnd(enrichedCandidate.token, "PASSED", "all_filters");
 }
 
 async function enrichSuccessfulCandidateSocials(candidate: CandidateResult): Promise<CandidateResult> {
@@ -367,6 +385,7 @@ async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: Cand
     };
   }
 
+  logCandidateBlockStart(token);
   logSignal(`${getTokenLabel(token)} passed native-transfer pattern filter`);
   logInfo(
     `${getTokenLabel(token)} native pattern passed: transfers=${firstTxFee.nativeTransferCount}, pattern_address=${firstTxFee.nativePatternAddress ?? "unknown"}, first_tx=${firstTxFee.signature}`,
@@ -374,7 +393,8 @@ async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: Cand
 
   const nextPatternTxReasons = await applyNextPatternTransactionFilters(token, firstTxFee);
   if (nextPatternTxReasons.length > 0) {
-    logInfo(`${getTokenLabel(token)} rejected after native pattern pass: ${nextPatternTxReasons.join(", ")}`);
+    logInfo(`${getTokenLabel(token)} rejected after native pattern pass at next-pattern tx filter: ${nextPatternTxReasons.join(", ")}`);
+    logCandidateBlockEnd(token, "FAILED", "next_pattern_address_tx", nextPatternTxReasons);
     return {
       candidate: null,
       reasons: nextPatternTxReasons,
@@ -387,7 +407,8 @@ async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: Cand
 
   const feeAndTipReasons = getFirstTxFeeAndTipReasons(firstTxFee);
   if (feeAndTipReasons.length > 0) {
-    logInfo(`${getTokenLabel(token)} rejected after native pattern pass: ${feeAndTipReasons.join(", ")}`);
+    logInfo(`${getTokenLabel(token)} rejected after native pattern pass at fee/tip filter: ${feeAndTipReasons.join(", ")}`);
+    logCandidateBlockEnd(token, "FAILED", "fee_tip", feeAndTipReasons);
     return {
       candidate: null,
       reasons: feeAndTipReasons,
@@ -417,6 +438,9 @@ async function buildCandidate(token: GmgnTrenchToken): Promise<{ candidate: Cand
     logInfo(
       `${getTokenLabel(token)} rejected at pattern-address uniqueness: pattern_address=${firstTxFee.nativePatternAddress} already seen on ${previousPatternMatches.length} successful token(s)`,
     );
+    logCandidateBlockEnd(token, "FAILED", "pattern_address_uniqueness", [
+      `pattern address ${firstTxFee.nativePatternAddress} already seen on ${previousPatternMatches.length} successful token(s)`,
+    ]);
     return {
       candidate: null,
       reasons: [
